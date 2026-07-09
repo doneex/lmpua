@@ -1898,7 +1898,13 @@
       scroll.append(empty);
       this.loading(false);
       if (Lampa.Activity.active().activity === this.activity) {
-        Lampa.Controller.toggle("head");
+        var sort = filter.render().find(".filter--sort");
+        if (sort && sort.length) {
+          last = sort[0];
+          Lampa.Controller.toggle("content");
+        } else {
+          Lampa.Controller.toggle("head");
+        }
       }
     };
     this.loading = function(status) {

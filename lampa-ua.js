@@ -2248,16 +2248,22 @@
             scroll.append(empty);
             this.loading(false);
             // BUG B: the list_empty template is NOT a .selector, so the 'content'
-            // controller has nothing focusable — the cursor is lost ("невідомо куди")
-            // and the source selector in the head becomes unreachable. loading(false)
-            // has just re-run start() → toggle('content') (which found nothing); now
-            // move focus UP to the filter head where the source selector lives
-            // (files.appendHead(filter.render())) so the user can switch source. Guard
-            // on the active activity (mirrors start()) so we never steal focus from
-            // another screen. When a chosen source returns results, draw() →
-            // loading(false) → start() → toggle('content') restores first-row focus.
+            // controller has nothing focusable and the cursor is lost. Focus the
+            // SOURCE selector (.filter--sort) directly — NOT the head, which lands
+            // on the search magnifier (лупа). The 'content' controller's
+            // collectionSet includes files.render() (the head with the filter), so
+            // pointing `last` at the source button and re-toggling 'content' makes
+            // collectionFocus(last) land there. draw() resets `last` when results
+            // arrive, so normal first-row focus is unaffected. Fallback to the head
+            // only if the source button isn't present, so the cursor is never lost.
             if (Lampa.Activity.active().activity === this.activity) {
-                Lampa.Controller.toggle('head');
+                var sort = filter.render().find('.filter--sort');
+                if (sort && sort.length) {
+                    last = sort[0];
+                    Lampa.Controller.toggle('content');
+                } else {
+                    Lampa.Controller.toggle('head');
+                }
             }
         };
 
