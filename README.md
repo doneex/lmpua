@@ -4,15 +4,20 @@ Ukrainian streaming sources for the [Lampa](https://github.com/lampa-app/LAMPA) 
 
 ## Install
 
-In Lampa: **Settings → Plugins → Add plugin**, and paste:
+In Lampa: **Settings → Plugins → Add plugin**, and paste one of:
 
 ```
-https://raw.githubusercontent.com/doneex/lmpua/main/lampa-ua.js
+https://doneex.github.io/lmpua/lu.js
+```
+```
+https://raw.githubusercontent.com/doneex/lmpua/main/lu.js
 ```
 
-Then open any movie/series and press **Дивитися (UA)**.
+The first (GitHub Pages) is preferred once Pages is enabled (Settings → Pages → Deploy from branch → `main` / root). The raw URL works immediately either way. Then open any movie/series and press **Дивитися (UA)**.
 
 > Reachable from anywhere, including with a VPN enabled on the device — unlike a local dev server on your LAN.
+>
+> After updating: remove and re-add the plugin (or restart Lampa) so it re-fetches; GitHub's CDN can lag a few minutes.
 
 ## Sources
 
@@ -47,7 +52,7 @@ node serve.js
 
 ## Notes
 
-- Single hand-maintained ES5 file (`lampa-ua.js`) — works on old Android-TV WebViews. No build step.
+- Shipped as a single ES5 file (`lu.js`) — works on old Android-TV WebViews.
 - Targets the native Lampa apps (Android / Android TV / Tizen), where requests bypass browser CORS.
 - No accounts, tokens, or secrets anywhere in the code.
 

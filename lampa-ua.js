@@ -2574,7 +2574,10 @@
                 '</div>' +
             '</div>');
 
-        Lampa.Template.add('online_ua_css', '<style id="online_ua_style">' +
+        // CSS as a plain string (NOT via Template.get — that mangles the CSS
+        // braces on some Lampa builds). Injected defensively so it can never
+        // abort registration.
+        var css = '<style id="online_ua_style">' +
             '.online-prestige{position:relative;border-radius:.3em;background-color:rgba(0,0,0,0.3);display:-webkit-box;display:-webkit-flex;display:flex;will-change:transform}' +
             '.online-prestige__body{padding:1.2em;line-height:1.3;-webkit-box-flex:1;-webkit-flex-grow:1;flex-grow:1;position:relative}' +
             '@media screen and (max-width:480px){.online-prestige__body{padding:.8em 1.2em}}' +
@@ -2602,9 +2605,18 @@
             '.online-prestige__avail>svg{width:1.5em;height:1.5em;display:block}' +
             '.online-prestige.focus::after{content:\'\';position:absolute;top:-0.6em;left:-0.6em;right:-0.6em;bottom:-0.6em;border-radius:.7em;border:solid .3em #fff;z-index:-1;pointer-events:none}' +
             '.online-prestige+.online-prestige{margin-top:1.5em}' +
-            '</style>');
-        if ($('#online_ua_style').length === 0) $('body').append(Lampa.Template.get('online_ua_css', {}, true));
+            '</style>';
+        function injectCSS() {
+            try {
+                if (typeof $ === 'undefined') return;
+                if ($('#online_ua_style').length) return;
+                $('body').append(css);
+            } catch (e) {}
+        }
 
+        // ── CORE registration FIRST — must never be blocked by CSS/settings.
+        // These are the only calls that make the card button appear; none of
+        // them touch jQuery, so they can't throw on an early/odd load.
         Lampa.Component.add(CONFIG.PLUGIN_ID, component);
 
         Lampa.Manifest.plugins = {
@@ -2629,6 +2641,7 @@
 
         Lampa.Listener.follow('full', function (e) {
             if (e.type == 'complite') {
+                injectCSS(); // styles guaranteed present by the time a card shows
                 var render = e.object.activity.render();
                 // Guard against double-adding the button on the same card.
                 if (render.find('.view--online_ua').length) return;
@@ -2641,6 +2654,8 @@
                 else render.find('.full-start__buttons').append(btn);
             }
         });
+
+        injectCSS(); // best-effort now; also retried lazily above
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -2828,9 +2843,17 @@
     // Startup — after the app is ready (mirrors the reference plugins).
     // ─────────────────────────────────────────────────────────────
     function startPlugin() {
-        initLang();
-        initSettings();
-        initMain();
+        // Each step isolated: a failure in one (e.g. settings on an older
+        // Lampa) must never abort the others, and must never bubble up to
+        // Lampa's plugin loader (which would show "failed to load plugin").
+        // Order: Lang → Main (core: component/manifest/button) → Settings.
+        try { initLang(); } catch (e) { logErr('lang', e); }
+        try { initMain(); } catch (e) { logErr('main', e); }
+        try { initSettings(); } catch (e) { logErr('settings', e); }
+    }
+
+    function logErr(where, e) {
+        try { console.log('online_ua init ' + where + ' failed:', e && e.message); } catch (x) {}
     }
 
     // Register immediately, exactly like the reference plugins (online_mod
