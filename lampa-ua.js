@@ -40,7 +40,8 @@
             proxy: 'online_ua_proxy_url',      // optional user fallback proxy
             source: 'online_ua_source',        // last picked source id
             enabled_prefix: 'online_ua_enabled_', // per-source on/off toggles
-            probe: 'online_ua_probe'           // show availability+quality badges (default on)
+            probe: 'online_ua_probe',          // show availability+quality badges (default on)
+            movie_voice: 'online_ua_movie_voice' // remembered dub choice for multi-voice movies
         }
     };
 
@@ -478,11 +479,18 @@
                 return;
             }
 
-            // Movie: resolve the player to a single playable stream.
+            // Movie: resolve the player to a single stream — or, for a multi-dub
+            // (ashdi ?multivoice) movie, a voices list (each dub a stream). Either
+            // way it's playable → 'ok' (so multivoice movies aren't a false ✗).
             if (!d.playerUrl) { finish(unknown()); return; }
             handle.req = src.extract(d.playerUrl, function (data) {
                 if (handle.cancelled) return;
                 if (data && data.url) { finish(ok(data.url, data.url)); return; }
+                if (data && data.voices && data.voices.length) {
+                    var mep = firstEpisode(data.voices);
+                    finish(ok('', (mep && mep.file) || ''));
+                    return;
+                }
                 finish(unknown());
             }, function (reason) {
                 if (handle.cancelled) return;
@@ -2376,28 +2384,74 @@
             }
         };
 
-        // Movie: resolve the player payload, then hand a single stream to the
-        // player. No mode switch — movies play directly.
+        // Movie: resolve the player. A flat single stream plays directly; a
+        // multi-dub movie (ashdi ?multivoice → a voices list) offers a voice
+        // picker first. Voice selection is thus uniform across every source, for
+        // movies AND series.
         this.playMovie = function (item, d) {
+            var _this = this;
             var src = this.source();
             last_request = src.extract(d.playerUrl, function (data) {
-                if (!data || !data.url) { Lampa.Noty.show(Lampa.Lang.translate('online_ua_no_video')); return; }
-                var movie = object.movie || {};
-                var title = movie.title || d.title || item.title;
-                if (movie.id) Lampa.Favorite.add('history', movie, 100);
-                var play = {
-                    title: title,
-                    url: data.url,
-                    poster: data.poster || d.poster || item.poster || (movie.img || ''),
-                    timeline: Lampa.Timeline.view(movieHash(item))
-                };
-                if (data.quality) play.quality = data.quality;
-                if (data.subtitles && data.subtitles.length) play.subtitles = data.subtitles;
-                Lampa.Player.play(play);
-                Lampa.Player.playlist([play]);
+                if (data && data.url) { _this.startMovie(item, d, data.url, data); return; }
+                var voices = (data && data.voices) || [];
+                if (voices.length) { _this.movieVoices(item, d, voices); return; }
+                Lampa.Noty.show(Lampa.Lang.translate('online_ua_no_video'));
             }, function (reason) {
                 Lampa.Noty.show(playError(reason));
             });
+        };
+
+        // Multi-dub movie: one voice → play it; several → Lampa.Select to choose
+        // (remembering the last pick), then play. A movie is just voices with one
+        // file each, so it reuses firstEpisode()/the shared voices shape.
+        this.movieVoices = function (item, d, voices) {
+            var _this = this;
+            if (voices.length === 1) { _this.playMovieVoice(item, d, voices[0]); return; }
+            var pref = Lampa.Storage.get(CONFIG.STORAGE.movie_voice, '') + '';
+            var list = [];
+            for (var i = 0; i < voices.length; i++) {
+                var vt = ('' + (voices[i].title || (Lampa.Lang.translate('online_ua_voice') + ' ' + (i + 1)))).replace(/\s+/g, ' ').trim();
+                list.push({ title: vt, index: i, selected: vt === pref });
+            }
+            Lampa.Select.show({
+                title: Lampa.Lang.translate('online_ua_voice'),
+                items: list,
+                onSelect: function (s) {
+                    Lampa.Storage.set(CONFIG.STORAGE.movie_voice, list[s.index].title);
+                    _this.playMovieVoice(item, d, voices[s.index]);
+                },
+                onBack: function () { Lampa.Controller.toggle('content'); }
+            });
+        };
+
+        // Resolve a chosen movie voice to its stream, then play. The voice carries
+        // a ready file (ashdi) or, rarely, a page → extract() short-circuits m3u8.
+        this.playMovieVoice = function (item, d, voice) {
+            var _this = this;
+            var ep = firstEpisode([voice]);
+            var target = ep && (ep.file || ep.page);
+            if (!target) { Lampa.Noty.show(Lampa.Lang.translate('online_ua_no_video')); return; }
+            last_request = this.source().extract(target, function (data) {
+                if (!data || !data.url) { Lampa.Noty.show(Lampa.Lang.translate('online_ua_no_video')); return; }
+                _this.startMovie(item, d, data.url, data);
+            }, function (reason) { Lampa.Noty.show(playError(reason)); });
+        };
+
+        // Shared movie playback (flat + per-voice paths).
+        this.startMovie = function (item, d, url, data) {
+            var movie = object.movie || {};
+            var title = movie.title || d.title || item.title;
+            if (movie.id) Lampa.Favorite.add('history', movie, 100);
+            var play = {
+                title: title,
+                url: url,
+                poster: (data && data.poster) || d.poster || item.poster || (movie.img || ''),
+                timeline: Lampa.Timeline.view(movieHash(item))
+            };
+            if (data && data.quality) play.quality = data.quality;
+            if (data && data.subtitles && data.subtitles.length) play.subtitles = data.subtitles;
+            Lampa.Player.play(play);
+            Lampa.Player.playlist([play]);
         };
 
         // Prefetch play: a cached probe already resolved the movie stream url, so

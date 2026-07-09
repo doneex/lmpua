@@ -12,7 +12,8 @@
       proxy: "online_ua_proxy_url",
       source: "online_ua_source",
       enabled_prefix: "online_ua_enabled_",
-      probe: "online_ua_probe"
+      probe: "online_ua_probe",
+      movie_voice: "online_ua_movie_voice"
     }
   };
   function net(url, opts, ok, err) {
@@ -377,6 +378,11 @@
         if (handle.cancelled) return;
         if (data && data.url) {
           finish(ok(data.url, data.url));
+          return;
+        }
+        if (data && data.voices && data.voices.length) {
+          var mep = firstEpisode(data.voices);
+          finish(ok("", mep && mep.file || ""));
           return;
         }
         finish(unknown());
@@ -1999,28 +2005,83 @@
       }
     };
     this.playMovie = function(item, d) {
+      var _this = this;
       var src = this.source();
       last_request = src.extract(d.playerUrl, function(data) {
+        if (data && data.url) {
+          _this.startMovie(item, d, data.url, data);
+          return;
+        }
+        var voices = data && data.voices || [];
+        if (voices.length) {
+          _this.movieVoices(item, d, voices);
+          return;
+        }
+        Lampa.Noty.show(Lampa.Lang.translate("online_ua_no_video"));
+      }, function(reason) {
+        Lampa.Noty.show(playError(reason));
+      });
+    };
+    this.movieVoices = function(item, d, voices) {
+      var _this = this;
+      if (voices.length === 1) {
+        _this.playMovieVoice(item, d, voices[0]);
+        return;
+      }
+      var pref = Lampa.Storage.get(CONFIG.STORAGE.movie_voice, "") + "";
+      var list = [];
+      for (var i = 0; i < voices.length; i++) {
+        var vt = ("" + (voices[i].title || Lampa.Lang.translate("online_ua_voice") + " " + (i + 1))).replace(/\s+/g, " ").trim();
+        list.push({
+          title: vt,
+          index: i,
+          selected: vt === pref
+        });
+      }
+      Lampa.Select.show({
+        title: Lampa.Lang.translate("online_ua_voice"),
+        items: list,
+        onSelect: function(s) {
+          Lampa.Storage.set(CONFIG.STORAGE.movie_voice, list[s.index].title);
+          _this.playMovieVoice(item, d, voices[s.index]);
+        },
+        onBack: function() {
+          Lampa.Controller.toggle("content");
+        }
+      });
+    };
+    this.playMovieVoice = function(item, d, voice) {
+      var _this = this;
+      var ep = firstEpisode([ voice ]);
+      var target = ep && (ep.file || ep.page);
+      if (!target) {
+        Lampa.Noty.show(Lampa.Lang.translate("online_ua_no_video"));
+        return;
+      }
+      last_request = this.source().extract(target, function(data) {
         if (!data || !data.url) {
           Lampa.Noty.show(Lampa.Lang.translate("online_ua_no_video"));
           return;
         }
-        var movie = object.movie || {};
-        var title = movie.title || d.title || item.title;
-        if (movie.id) Lampa.Favorite.add("history", movie, 100);
-        var play = {
-          title: title,
-          url: data.url,
-          poster: data.poster || d.poster || item.poster || (movie.img || ""),
-          timeline: Lampa.Timeline.view(movieHash(item))
-        };
-        if (data.quality) play.quality = data.quality;
-        if (data.subtitles && data.subtitles.length) play.subtitles = data.subtitles;
-        Lampa.Player.play(play);
-        Lampa.Player.playlist([ play ]);
+        _this.startMovie(item, d, data.url, data);
       }, function(reason) {
         Lampa.Noty.show(playError(reason));
       });
+    };
+    this.startMovie = function(item, d, url, data) {
+      var movie = object.movie || {};
+      var title = movie.title || d.title || item.title;
+      if (movie.id) Lampa.Favorite.add("history", movie, 100);
+      var play = {
+        title: title,
+        url: url,
+        poster: data && data.poster || d.poster || item.poster || (movie.img || ""),
+        timeline: Lampa.Timeline.view(movieHash(item))
+      };
+      if (data && data.quality) play.quality = data.quality;
+      if (data && data.subtitles && data.subtitles.length) play.subtitles = data.subtitles;
+      Lampa.Player.play(play);
+      Lampa.Player.playlist([ play ]);
     };
     this.playMovieDirect = function(item, url) {
       var movie = object.movie || {};
