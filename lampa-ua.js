@@ -1840,7 +1840,21 @@
             var loader = card.find('.online-prestige__loader');
             var img = image.find('img')[0];
             if (opts.poster && img) {
-                img.onerror = function () { img.src = './img/img_broken.svg'; if (loader.length) loader.remove(); };
+                var tried_fb = false;
+                img.onerror = function () {
+                    // A broken poster URL: try the fallback (e.g. the series poster
+                    // for an episode with a dead/missing thumbnail) once, then the
+                    // broken-image placeholder. Guard against a fallback == poster
+                    // or a fallback that also 404s (would loop).
+                    if (opts.posterFallback && !tried_fb && opts.posterFallback !== opts.poster) {
+                        tried_fb = true;
+                        img.src = opts.posterFallback;
+                        return;
+                    }
+                    img.onerror = null;
+                    img.src = './img/img_broken.svg';
+                    if (loader.length) loader.remove();
+                };
                 img.onload = function () { image.addClass('online-prestige__img--loaded'); if (loader.length) loader.remove(); };
                 img.src = opts.poster;
             } else if (loader.length) {
@@ -2502,10 +2516,12 @@
             }
 
             episodes.forEach(function (ep, i) {
+                var seriesPoster = (series_detail && series_detail.poster) || (series_item && series_item.poster) || '';
                 var card = makeCard({
                     title: episodeTitle(ep, season),
                     info: ep.name || '',
-                    poster: ep.poster || (series_detail && series_detail.poster) || '',
+                    poster: ep.poster || seriesPoster,
+                    posterFallback: seriesPoster, // broken episode thumb → series poster (not the broken icon)
                     hash: episodeHash(ep, season, voice)
                 });
                 card.on('hover:focus', function (e) {

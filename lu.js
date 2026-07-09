@@ -1546,7 +1546,14 @@
       var loader = card.find(".online-prestige__loader");
       var img = image.find("img")[0];
       if (opts.poster && img) {
+        var tried_fb = false;
         img.onerror = function() {
+          if (opts.posterFallback && !tried_fb && opts.posterFallback !== opts.poster) {
+            tried_fb = true;
+            img.src = opts.posterFallback;
+            return;
+          }
+          img.onerror = null;
           img.src = "./img/img_broken.svg";
           if (loader.length) loader.remove();
         };
@@ -2120,10 +2127,12 @@
         return;
       }
       episodes.forEach(function(ep, i) {
+        var seriesPoster = series_detail && series_detail.poster || series_item && series_item.poster || "";
         var card = makeCard({
           title: episodeTitle(ep, season),
           info: ep.name || "",
-          poster: ep.poster || series_detail && series_detail.poster || "",
+          poster: ep.poster || seriesPoster,
+          posterFallback: seriesPoster,
           hash: episodeHash(ep, season, voice)
         });
         card.on("hover:focus", function(e) {
