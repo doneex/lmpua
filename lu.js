@@ -1141,6 +1141,7 @@
     title: "KinoUkr",
     baseUrl: "https://kinoukr.tv",
     priority: 3,
+    hidden: true,
     headers: function() {
       return {
         Referer: this.baseUrl + "/"
