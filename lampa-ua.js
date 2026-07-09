@@ -1300,10 +1300,6 @@
         id: 'kinoukr',
         title: 'KinoUkr',
         baseUrl: 'https://kinoukr.tv',
-        // Hidden for now: its search sits behind a Cloudflare interactive JS
-        // challenge that a JS-less client can't solve (confirmed on-device, even
-        // with VPN). Detail/stream work; remove this flag if search is solved.
-        hidden: true,
         priority: 3,
 
         headers: function () {
@@ -1311,23 +1307,40 @@
         },
 
         // search(query, ok, err) -> [ {title, year, url, poster, is_series} ]
-        // ⚠️ Cloudflare-blocked (see header). Tries the DLE GET via net() (which
-        // already walks DIRECT → public proxies → the user proxy); a challenge in
-        // the body OR a total net() failure surfaces as err({cf:true}) — never junk.
+        // The standard DLE search is Cloudflare-blocked, but the site uses the
+        // lazydev search MODULE which returns clean JSON. Two steps: GET the
+        // (ungated) /home/ page for DLE's dle_login_hash, then POST it to the
+        // lazydev endpoint. A challenge in either response, a missing hash, or a
+        // net() failure surfaces as err({cf:true}) — never junk. (The POST may be
+        // CF-gated from datacenter IPs but is expected to pass on a residential device.)
         search: function (query, ok, err) {
             var self = this;
             ok = ok || function () {};
             err = err || function () {};
-            var url = self.baseUrl + '/index.php?do=search&subaction=search&story=' + encodeURIComponent(query);
-            return net(url, { dataType: 'text', headers: self.headers() }, function (html) {
-                // A challenge page is NOT results — treat it as a search failure.
-                if (self.isCloudflareChallenge(html)) { err({ cf: true }); return; }
-                ok(self.parseSearch(html));
-            }, function () {
-                // Every net() tier failed — the search endpoint is CF-challenged
-                // (or the user has no working proxy). Report it as a CF block.
-                err({ cf: true });
-            });
+            var handle = { req: null, clear: function () { if (handle.req && handle.req.clear) handle.req.clear(); } };
+            handle.req = net(self.baseUrl + '/home/', { dataType: 'text', headers: self.headers() }, function (home) {
+                if (self.isCloudflareChallenge(home)) { err({ cf: true }); return; }
+                var m = ('' + home).match(/dle_login_hash\s*=\s*['"]([a-f0-9]{32,40})['"]/i);
+                if (!m) { err({ cf: true }); return; }
+                var body = 'story=' + encodeURIComponent(query) +
+                    '&dle_hash=' + m[1] + '&thisUrl=' + encodeURIComponent('/home/');
+                handle.req = net(self.baseUrl + '/engine/lazydev/dle_search/ajax.php', {
+                    dataType: 'text',
+                    post: body,
+                    headers: {
+                        'Referer': self.baseUrl + '/home/',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    }
+                }, function (text) {
+                    if (self.isCloudflareChallenge(text)) { err({ cf: true }); return; }
+                    var content = '';
+                    try { content = (JSON.parse(text) || {}).content || ''; } catch (e) { content = ''; }
+                    if (!content) { err({ cf: true }); return; }
+                    ok(self.parseSearch(content));
+                }, function () { err({ cf: true }); });
+            }, function () { err({ cf: true }); });
+            return handle;
         },
 
         // Detect a Cloudflare "Just a moment…" managed-challenge page so it is
@@ -1340,46 +1353,33 @@
                 /enable javascript and cookies/i.test(s);
         },
 
-        // Parse DLE .short cards (same markup on search / homepage / category
-        // listings — verified in kinoukr-home.html). is_series is only a best-effort
-        // hint from the card badge; detail() is authoritative for the real type.
-        parseSearch: function (html) {
+        // Parse the lazydev search-module HTML (the JSON `content` field): a flat
+        // list of <a href="/{id}-slug.html"> each with an <img> and
+        // <span class="searchheading">Title (YYYY)</span>. is_series is left false —
+        // kinoukr's flat URLs give no reliable type hint; detail() is authoritative.
+        parseSearch: function (content) {
             var self = this;
-            var doc = htmlDoc(html);
+            var doc = htmlDoc(content);
             var out = [];
             var seen = {};
-
-            var cards = doc.querySelectorAll('.short.clearfix');
-            if (!cards.length) cards = doc.querySelectorAll('.short');
-            for (var i = 0; i < cards.length; i++) {
-                var card = cards[i];
-
-                var a = card.querySelector('a.short-title') ||
-                    card.querySelector('.short-img a.ps-link[href]') ||
-                    card.querySelector('a[href]');
-                var href = a ? absUrl(a.getAttribute('href'), self.baseUrl) : '';
-                if (!href) {
-                    var th = card.querySelector('.th-inf[data-href]');
-                    if (th) href = absUrl(th.getAttribute('data-href'), self.baseUrl);
-                }
-                if (!href || seen[href]) continue;
+            var links = doc.querySelectorAll('a[href]');
+            for (var i = 0; i < links.length; i++) {
+                var a = links[i];
+                var href = absUrl(a.getAttribute('href'), self.baseUrl);
+                if (!href || seen[href] || href.indexOf('.html') < 0) continue;
+                var head = a.querySelector('.searchheading');
+                var raw = ('' + (head ? head.textContent : '')).replace(/\s+/g, ' ').trim();
+                if (!raw) continue;
                 seen[href] = true;
-
-                var tEl = card.querySelector('a.short-title');
-                var img = card.querySelector('.short-img img') || card.querySelector('img');
-                var title = tEl ? tEl.textContent : (img ? (img.getAttribute('alt') || '') : '');
-                title = (title || '').replace(/\s+/g, ' ').trim();
-                if (!title) continue;
-
+                var ym = raw.match(/\((\d{4})\)\s*$/);
+                var img = a.querySelector('img');
                 var poster = img ? (img.getAttribute('data-src') || img.getAttribute('src') || '') : '';
-                var ym = (card.textContent || '').match(/\b(?:19|20)\d{2}\b/);
-
                 out.push({
-                    title: title,
-                    year: ym ? ym[0] : '',
+                    title: raw.replace(/\s*\(\d{4}\)\s*$/, '').trim(),
+                    year: ym ? ym[1] : '',
                     url: href,
                     poster: poster ? absUrl(poster, self.baseUrl) : '',
-                    is_series: !!card.querySelector('.m-meta.m-series, .fa-circle-play')
+                    is_series: false
                 });
             }
             return out;
