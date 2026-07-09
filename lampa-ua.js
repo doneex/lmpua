@@ -398,12 +398,19 @@
 
     // probeResolve(src, item, done) — determine availability + (movie) stream url +
     // quality for a search-result `item` using ONLY the Source interface, WITHOUT
-    // the user clicking. done({ state:'ok'|'no', url:'', quality:{resolution,type} }).
-    //   MOVIE  : detail() → extract(playerUrl) → { url } (state 'ok' + quality from url).
-    //   SERIES : detail() → available if a first episode exists; if it carries a
-    //            ready `file` use that for quality, else extract(first ep page)
-    //            (geo-gated / no player → err → state 'no').
-    // state:'no' whenever detail/extract errors, is geo-flagged, or yields no url.
+    // the user clicking. done({ state:'ok'|'no'|'unknown', url, quality:{…} }).
+    //   'ok'      : a stream resolved (movie stream, or a series episode/playlist).
+    //   'no'      : CONFIRMED unavailable — a resolve error that explicitly carries a
+    //               geo/region flag (sources call err({geo:true})). Nothing else.
+    //   'unknown' : ambiguous — detail ok but no resolvable stream, a non-geo error,
+    //               or no player to probe. NOT the same as 'no' (see BUG A): a series
+    //               may come back is_series with empty voices + a playerUrl that the
+    //               real play path (openSeries) resolves fine, so we re-resolve it
+    //               here and only call it 'no' on an explicit geo flag.
+    //   MOVIE  : detail() → extract(playerUrl) → url ⇒ ok; err.geo ⇒ no; else unknown.
+    //   SERIES : firstEpisode(voices) ⇒ ok (quality from ep.file); else if playerUrl,
+    //            extract() it (mirrors openSeries) → url/voices ⇒ ok; err.geo ⇒ no;
+    //            else unknown; else (no ep, no player) ⇒ unknown.
     // Returns a cancelable handle { clear() } proxying the in-flight net() request
     // (mirrors how the component clears `last_request`). Does NOT use `this` — so it
     // is unit-testable offline against the fixtures. Never touches the DOM.
@@ -420,49 +427,77 @@
             done(result);
         }
         function no() { return { state: 'no', url: '', quality: { resolution: '', type: '' } }; }
+        function unknown() { return { state: 'unknown', url: '', quality: { resolution: '', type: '' } }; }
         function ok(url, file) { return { state: 'ok', url: url || '', quality: parseStreamQuality(file || url, item && item.quality) }; }
+        // A resolve failure is CONFIRMED 'no' only when it carries an explicit geo/
+        // region flag (sources signal it via err({geo:true})). Every other failure —
+        // a network error (net() calls err(status,code)), an unseen payload, etc. —
+        // is ambiguous → 'unknown', never a red ✗.
+        function fromErr(reason) { return (reason && reason.geo) ? no() : unknown(); }
 
-        if (!src || typeof src.detail !== 'function') { finish(no()); return handle; }
+        if (!src || typeof src.detail !== 'function') { finish(unknown()); return handle; }
 
         handle.req = src.detail(item.url, function (d) {
             if (handle.cancelled) return;
-            if (!d) { finish(no()); return; }
+            if (!d) { finish(unknown()); return; }
 
             if (d.is_series) {
                 var ep = firstEpisode(d.voices);
-                if (!ep) { finish(no()); return; }
-                if (ep.file) { finish(ok('', ep.file)); return; }
-                // No ready file (per-episode page) — resolve it to detect geo-gate.
-                handle.req = src.extract(ep.file || ep.page, function (data) {
-                    if (handle.cancelled) return;
-                    if (!data || !data.url) { finish(no()); return; }
-                    finish(ok('', data.url));
-                }, function () {
-                    if (handle.cancelled) return;
-                    finish(no());
-                });
+                if (ep) {
+                    if (ep.file) { finish(ok('', ep.file)); return; }
+                    // No ready file (per-episode page) — resolve it to detect geo-gate.
+                    handle.req = src.extract(ep.file || ep.page, function (data) {
+                        if (handle.cancelled) return;
+                        if (data && data.url) { finish(ok('', data.url)); return; }
+                        finish(unknown());
+                    }, function (reason) {
+                        if (handle.cancelled) return;
+                        finish(fromErr(reason));
+                    });
+                    return;
+                }
+                // No episode yet. uakino/uafilm can return is_series with empty voices
+                // + a playerUrl when the eager extract came back empty; re-resolve it
+                // the way openSeries does so a geo-block reads 'no' and an ambiguous
+                // failure reads 'unknown' (NOT a false ✗).
+                if (d.playerUrl) {
+                    handle.req = src.extract(d.playerUrl, function (data) {
+                        if (handle.cancelled) return;
+                        if (data && (data.url || (data.voices && data.voices.length))) { finish(ok('', data.url || '')); return; }
+                        finish(unknown());
+                    }, function (reason) {
+                        if (handle.cancelled) return;
+                        finish(fromErr(reason));
+                    });
+                    return;
+                }
+                // No episode and no player to probe → can't confirm either way.
+                finish(unknown());
                 return;
             }
 
             // Movie: resolve the player to a single playable stream.
-            if (!d.playerUrl) { finish(no()); return; }
+            if (!d.playerUrl) { finish(unknown()); return; }
             handle.req = src.extract(d.playerUrl, function (data) {
                 if (handle.cancelled) return;
-                if (!data || !data.url) { finish(no()); return; }
-                finish(ok(data.url, data.url));
-            }, function () {
+                if (data && data.url) { finish(ok(data.url, data.url)); return; }
+                finish(unknown());
+            }, function (reason) {
                 if (handle.cancelled) return;
-                finish(no());
+                finish(fromErr(reason));
             });
-        }, function () {
+        }, function (reason) {
             if (handle.cancelled) return;
-            finish(no());
+            finish(fromErr(reason));
         });
         return handle;
     }
 
     // ── card badge rendering (inline SVG availability circle + res/type pills) ──
-    // availabilitySvg(state) — 'check' (grey hollow), 'ok' (green ✓), 'no' (red ✗).
+    // availabilitySvg(state) — 'ok' (green ✓, plays), 'no' (red ✗, CONFIRMED geo/
+    // unavailable), 'unknown' (grey hollow, FINAL "couldn't verify"), anything else
+    // = 'check' (grey hollow, in-progress). 'unknown' and 'check' share the neutral
+    // hollow circle but differ by tooltip: 'unknown' is a settled result, not a red ✗.
     function availabilitySvg(state) {
         var title, cls, inner;
         if (state === 'ok') {
@@ -475,6 +510,10 @@
             cls = 'online-prestige__avail--no';
             inner = '<circle cx="12" cy="12" r="11" fill="#e0483e"/>' +
                 '<path d="M8.2 8.2l7.6 7.6M15.8 8.2l-7.6 7.6" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>';
+        } else if (state === 'unknown') {
+            title = Lampa.Lang.translate('online_ua_unknown');
+            cls = 'online-prestige__avail--unknown';
+            inner = '<circle cx="12" cy="12" r="9" fill="none" stroke="#9aa0a6" stroke-width="2.2"/>';
         } else {
             title = Lampa.Lang.translate('online_ua_checking');
             cls = 'online-prestige__avail--check';
@@ -499,15 +538,24 @@
         if (!el.length) return;
         var q = (result && result.quality) || {};
         el.html(badgesHtml({
-            availability: (result && result.state === 'ok') ? 'ok' : 'no',
+            // Pass the REAL settled state through — 'ok' (green), 'no' (red), or
+            // 'unknown' (neutral). Do NOT collapse a non-'ok' to a red ✗.
+            availability: (result && result.state) || 'no',
             resolution: q.resolution || '',
             type: q.type || ''
         }));
     }
 
     // Session-wide probe cache, keyed by `active_source + '|' + item.url`. Shared
-    // across component instances (per app session): never re-probe a cached item.
+    // across component instances (per app session): a cached item is not re-probed.
     var PROBE_CACHE = {};
+
+    // Only a positively-resolved probe ('ok') is cached. 'no' and 'unknown' are NOT
+    // cached (see BUG A): the module-wide cache is session-long, so caching a 'no'
+    // taken BEFORE the user enabled a device VPN would pin a red ✗ for the whole
+    // session even after the VPN makes the title play. Leaving them uncached means
+    // toggling the VPN and re-searching re-probes and can flip ✗/neutral → ✓.
+    function probeCacheable(result) { return !!(result && result.state === 'ok'); }
 
     // ─────────────────────────────────────────────────────────────
     // SOURCE: uafix.net (Netflix content dubbed in Ukrainian).
@@ -1860,7 +1908,9 @@
                         if (!probe_inflight[key]) return; // cancelled/reset meanwhile
                         delete probe_inflight[key];
                         probe_inflight_n--;
-                        PROBE_CACHE[key] = result;
+                        // Cache ONLY 'ok' — never a 'no'/'unknown' (see probeCacheable):
+                        // keeps a pre-VPN failure from sticking for the whole session.
+                        if (probeCacheable(result)) PROBE_CACHE[key] = result;
                         var card = probe_cards[key];
                         if (card) setCardBadges(card, result);
                         _this.probeDrain();
@@ -2191,6 +2241,18 @@
             scroll.clear();
             scroll.append(empty);
             this.loading(false);
+            // BUG B: the list_empty template is NOT a .selector, so the 'content'
+            // controller has nothing focusable — the cursor is lost ("невідомо куди")
+            // and the source selector in the head becomes unreachable. loading(false)
+            // has just re-run start() → toggle('content') (which found nothing); now
+            // move focus UP to the filter head where the source selector lives
+            // (files.appendHead(filter.render())) so the user can switch source. Guard
+            // on the active activity (mirrors start()) so we never steal focus from
+            // another screen. When a chosen source returns results, draw() →
+            // loading(false) → start() → toggle('content') restores first-row focus.
+            if (Lampa.Activity.active().activity === this.activity) {
+                Lampa.Controller.toggle('head');
+            }
         };
 
         this.loading = function (status) {
@@ -2225,10 +2287,13 @@
                 // Badge seed: probing ON → neutral circle now (or cached state if we
                 // already probed this item this session); probing OFF → no circle,
                 // only the coarse listing quality hint (if the source gave one).
+                // Only 'ok' is ever cached (probeCacheable), so a cache HIT seeds the
+                // green state now; a MISS seeds the neutral 'check' circle and enqueues
+                // a fresh probe below (which can settle to ok / no / unknown).
                 var cached = enabled ? PROBE_CACHE[probeKey(item)] : null;
                 var hintQ = enabled ? { resolution: '', type: '' } : parseStreamQuality('', item.quality);
                 var seed = cached ? {
-                    availability: cached.state === 'ok' ? 'ok' : 'no',
+                    availability: cached.state,
                     resolution: cached.quality.resolution,
                     type: cached.quality.type
                 } : {
@@ -2835,6 +2900,11 @@
                 uk: 'Перевірка…',
                 en: 'Checking…',
                 ru: 'Проверка…'
+            },
+            online_ua_unknown: {
+                uk: 'Не вдалося перевірити',
+                en: 'Couldn’t verify',
+                ru: 'Не удалось проверить'
             }
         });
     }

@@ -302,6 +302,16 @@
         }
       };
     }
+    function unknown() {
+      return {
+        state: "unknown",
+        url: "",
+        quality: {
+          resolution: "",
+          type: ""
+        }
+      };
+    }
     function ok(url, file) {
       return {
         state: "ok",
@@ -309,57 +319,74 @@
         quality: parseStreamQuality(file || url, item && item.quality)
       };
     }
+    function fromErr(reason) {
+      return reason && reason.geo ? no() : unknown();
+    }
     if (!src || typeof src.detail !== "function") {
-      finish(no());
+      finish(unknown());
       return handle;
     }
     handle.req = src.detail(item.url, function(d) {
       if (handle.cancelled) return;
       if (!d) {
-        finish(no());
+        finish(unknown());
         return;
       }
       if (d.is_series) {
         var ep = firstEpisode(d.voices);
-        if (!ep) {
-          finish(no());
-          return;
-        }
-        if (ep.file) {
-          finish(ok("", ep.file));
-          return;
-        }
-        handle.req = src.extract(ep.file || ep.page, function(data) {
-          if (handle.cancelled) return;
-          if (!data || !data.url) {
-            finish(no());
+        if (ep) {
+          if (ep.file) {
+            finish(ok("", ep.file));
             return;
           }
-          finish(ok("", data.url));
-        }, function() {
-          if (handle.cancelled) return;
-          finish(no());
-        });
+          handle.req = src.extract(ep.file || ep.page, function(data) {
+            if (handle.cancelled) return;
+            if (data && data.url) {
+              finish(ok("", data.url));
+              return;
+            }
+            finish(unknown());
+          }, function(reason) {
+            if (handle.cancelled) return;
+            finish(fromErr(reason));
+          });
+          return;
+        }
+        if (d.playerUrl) {
+          handle.req = src.extract(d.playerUrl, function(data) {
+            if (handle.cancelled) return;
+            if (data && (data.url || data.voices && data.voices.length)) {
+              finish(ok("", data.url || ""));
+              return;
+            }
+            finish(unknown());
+          }, function(reason) {
+            if (handle.cancelled) return;
+            finish(fromErr(reason));
+          });
+          return;
+        }
+        finish(unknown());
         return;
       }
       if (!d.playerUrl) {
-        finish(no());
+        finish(unknown());
         return;
       }
       handle.req = src.extract(d.playerUrl, function(data) {
         if (handle.cancelled) return;
-        if (!data || !data.url) {
-          finish(no());
+        if (data && data.url) {
+          finish(ok(data.url, data.url));
           return;
         }
-        finish(ok(data.url, data.url));
-      }, function() {
+        finish(unknown());
+      }, function(reason) {
         if (handle.cancelled) return;
-        finish(no());
+        finish(fromErr(reason));
       });
-    }, function() {
+    }, function(reason) {
       if (handle.cancelled) return;
-      finish(no());
+      finish(fromErr(reason));
     });
     return handle;
   }
@@ -373,6 +400,10 @@
       title = Lampa.Lang.translate("online_ua_unavailable");
       cls = "online-prestige__avail--no";
       inner = '<circle cx="12" cy="12" r="11" fill="#e0483e"/>' + '<path d="M8.2 8.2l7.6 7.6M15.8 8.2l-7.6 7.6" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>';
+    } else if (state === "unknown") {
+      title = Lampa.Lang.translate("online_ua_unknown");
+      cls = "online-prestige__avail--unknown";
+      inner = '<circle cx="12" cy="12" r="9" fill="none" stroke="#9aa0a6" stroke-width="2.2"/>';
     } else {
       title = Lampa.Lang.translate("online_ua_checking");
       cls = "online-prestige__avail--check";
@@ -396,12 +427,15 @@
     if (!el.length) return;
     var q = result && result.quality || {};
     el.html(badgesHtml({
-      availability: result && result.state === "ok" ? "ok" : "no",
+      availability: result && result.state || "no",
       resolution: q.resolution || "",
       type: q.type || ""
     }));
   }
   var PROBE_CACHE = {};
+  function probeCacheable(result) {
+    return !!(result && result.state === "ok");
+  }
   SOURCES.uafix = {
     id: "uafix",
     title: "UAFix",
@@ -1543,7 +1577,7 @@
             if (!probe_inflight[key]) return;
             delete probe_inflight[key];
             probe_inflight_n--;
-            PROBE_CACHE[key] = result;
+            if (probeCacheable(result)) PROBE_CACHE[key] = result;
             var card = probe_cards[key];
             if (card) setCardBadges(card, result);
             _this.probeDrain();
@@ -1824,6 +1858,9 @@
       scroll.clear();
       scroll.append(empty);
       this.loading(false);
+      if (Lampa.Activity.active().activity === this.activity) {
+        Lampa.Controller.toggle("head");
+      }
     };
     this.loading = function(status) {
       if (status) this.activity.loader(true); else {
@@ -1852,7 +1889,7 @@
           type: ""
         } : parseStreamQuality("", item.quality);
         var seed = cached ? {
-          availability: cached.state === "ok" ? "ok" : "no",
+          availability: cached.state,
           resolution: cached.quality.resolution,
           type: cached.quality.type
         } : {
@@ -2334,6 +2371,11 @@
         uk: "Перевірка…",
         en: "Checking…",
         ru: "Проверка…"
+      },
+      online_ua_unknown: {
+        uk: "Не вдалося перевірити",
+        en: "Couldn’t verify",
+        ru: "Не удалось проверить"
       }
     });
   }
