@@ -94,6 +94,20 @@
   function isGeoHost(url) {
     return /(ashdi|tortuga|moon)/i.test("" + (url || ""));
   }
+  function parseSubtitles(str) {
+    var out = [];
+    ("" + (str || "")).split(",").forEach(function(s) {
+      var mm = s.match(/\[([^\]]+)\](.*)/);
+      if (mm && mm[2]) out.push({
+        label: mm[1],
+        url: mm[2].trim()
+      }); else if (s.indexOf("http") === 0) out.push({
+        label: "sub",
+        url: s.trim()
+      });
+    });
+    return out;
+  }
   function parsePlayerjs(text) {
     var res = {
       file: "",
@@ -118,18 +132,7 @@
     var pm = text.match(/poster\s*:\s*"([^"]*)"/);
     if (pm) res.poster = pm[1];
     var sm = text.match(/subtitle\s*:\s*"([^"]*)"/);
-    if (sm && sm[1]) {
-      sm[1].split(",").forEach(function(s) {
-        var mm = s.match(/\[([^\]]+)\](.*)/);
-        if (mm && mm[2]) res.subtitles.push({
-          label: mm[1],
-          url: mm[2].trim()
-        }); else if (s.indexOf("http") === 0) res.subtitles.push({
-          label: "sub",
-          url: s.trim()
-        });
-      });
-    }
+    if (sm && sm[1]) res.subtitles = parseSubtitles(sm[1]);
     return res;
   }
   function playlistToVoices(playlist) {
@@ -161,6 +164,54 @@
         } ] : []
       };
     });
+  }
+  function labelVoices(voices, pairs) {
+    if (!voices || !voices.length || !pairs || !pairs.length) return voices;
+    function norm(s) {
+      return ("" + s).toLowerCase().replace(/[^0-9a-zа-яіїєґ]+/gi, "");
+    }
+    function withType(base, type) {
+      return type ? (base ? base + " · " + type : type) : base;
+    }
+    if (voices.length === 1) {
+      var p = pairs[0];
+      var cur = (voices[0].title || "").trim();
+      var lab = withType(cur || p.studio, p.type);
+      if (lab) voices[0].label = lab;
+      return voices;
+    }
+    for (var i = 0; i < voices.length; i++) {
+      var cur2 = (voices[i].title || "").trim();
+      var vt = norm(cur2);
+      if (!vt) continue;
+      for (var j = 0; j < pairs.length; j++) {
+        var ns = norm(pairs[j].studio);
+        if (ns && (ns === vt || ns.indexOf(vt) >= 0 || vt.indexOf(ns) >= 0)) {
+          voices[i].label = withType(cur2, pairs[j].type);
+          break;
+        }
+      }
+    }
+    return voices;
+  }
+  function dubPairsTypeFirst(str) {
+    str = ("" + (str || "")).replace(/\s+/g, " ").trim();
+    if (!str) return [];
+    var kv = str.split("|");
+    var type = (kv[0] || "").trim();
+    var pairs = [];
+    for (var k = 1; k < kv.length; k++) {
+      var studio = kv[k].trim();
+      if (studio) pairs.push({
+        studio: studio,
+        type: type
+      });
+    }
+    if (!pairs.length && type) pairs.push({
+      studio: "",
+      type: type
+    });
+    return pairs;
   }
   var QUALITY_TYPE_RULES = [ [ /web-?dl/, "WEB-DL" ], [ /web-?rip/, "WEBRip" ], [ /hd-?rip/, "HDRip" ], [ /bd-?rip/, "BDRip" ], [ /blu-?ray/, "BluRay" ], [ /dvd-?rip/, "DVDRip" ], [ /hd-?tv/, "HDTV" ], [ /cam-?rip/, "CAM" ], [ /(?:^|[^a-z])cam(?:[^a-z]|$)/, "CAM" ], [ /(?:^|[^a-z])ts(?:[^a-z]|$)/, "TS" ], [ /(?:^|[^a-z])hd(?:[^a-z]|$)/, "HD" ] ];
   function qualityType(s) {
@@ -235,7 +286,11 @@
       var it = list[i];
       var s1 = target.title ? titleSimilarity(it.title, target.title) : 0;
       var s2 = target.original_title ? titleSimilarity(it.title, target.original_title) : 0;
-      var score = Math.max(s1, s2);
+      // Some sources (uakino) also expose the result's own original/latin title —
+      // match it against the TMDB target so a mismatched UA localization doesn't drop the hit.
+      var s3 = it.original_title && target.original_title ? titleSimilarity(it.original_title, target.original_title) : 0;
+      var s4 = it.original_title && target.title ? titleSimilarity(it.original_title, target.title) : 0;
+      var score = Math.max(s1, s2, s3, s4);
       if (ty && it.year) {
         var iy = parseInt(("" + it.year).replace(/\D/g, ""), 10);
         if (iy && Math.abs(iy - ty) <= 1) score += .5;
@@ -729,6 +784,17 @@
       url = "" + (url || "");
       return url.indexOf("/serialy/") >= 0 || url.indexOf("/multserialy/") >= 0;
     },
+    dubRow: function(doc) {
+      var cats = doc.querySelectorAll(".table__category");
+      for (var i = 0; i < cats.length; i++) {
+        if (/Озвучення/i.test(cats[i].textContent || "")) {
+          var par = cats[i].parentNode;
+          var v = par ? par.querySelector(".table-text__category") : cats[i].nextElementSibling;
+          return v ? v.textContent.replace(/\s+/g, " ").trim() : "";
+        }
+      }
+      return "";
+    },
     detail: function(url, ok, err) {
       var self = this;
       ok = ok || function() {};
@@ -757,10 +823,11 @@
             });
             return;
           }
+          var dub = dubPairsTypeFirst(self.dubRow(doc));
           self.extract(playerUrl, function(data) {
             ok({
               is_series: true,
-              voices: data && data.voices || [],
+              voices: labelVoices(data && data.voices || [], dub),
               title: title,
               poster: poster,
               description: description
@@ -878,8 +945,11 @@
         var poster = img ? img.getAttribute("src") || img.getAttribute("data-src") || "" : "";
         var badge = card.querySelector(".ua-badges .ua-badge") || card.querySelector(".ua-badge");
         var is_series = !!(badge && /сезон/i.test(badge.textContent || ""));
+        var origEl = card.querySelector(".ua-card-origin");
+        var original_title = origEl ? origEl.textContent.replace(/\s+/g, " ").trim() : "";
         out.push({
           title: title,
+          original_title: original_title,
           year: ym ? ym[1] : "",
           url: href,
           poster: poster ? absUrl(poster, self.baseUrl) : "",
@@ -1208,10 +1278,11 @@
             });
             return;
           }
+          var zvuk = self.parseZvuk(doc);
           self.extract(playerUrl, function(data) {
             ok({
               is_series: true,
-              voices: data && data.voices || [],
+              voices: self.applyVoiceLabels(data && data.voices || [], zvuk),
               title: title,
               year: year,
               poster: poster,
@@ -1241,6 +1312,46 @@
       }
       var m2 = ("" + (ogTitle || "")).match(/\b(?:19|20)\d{2}\b/);
       return m2 ? m2[0] : "";
+    },
+    parseZvuk: function(doc) {
+      var lines = doc.querySelectorAll(".finfo .sd-line, .sd-line");
+      for (var i = 0; i < lines.length; i++) {
+        var span = lines[i].querySelector("span");
+        if (span && /Звук/i.test(span.textContent)) {
+          return (lines[i].textContent || "").replace(/\s+/g, " ").replace(/^\s*Звук\s*:?\s*/i, "").trim();
+        }
+      }
+      return "";
+    },
+    applyVoiceLabels: function(voices, zvuk) {
+      if (!voices || !voices.length || !zvuk) return voices;
+      // Звук has two multi-voice shapes: per-pair "Studio | Type, Studio | Type"
+      // (pipes === commas+1) and shared-type "Studio1, Studio2 | Type" (one type
+      // after the last pipe). Normalise both to [{studio, type}] pairs.
+      var pipes = (zvuk.match(/\|/g) || []).length;
+      var commas = (zvuk.match(/,/g) || []).length;
+      var pairs = [];
+      if (pipes === commas + 1) {
+        zvuk.split(",").forEach(function(seg) {
+          var kv = seg.split("|");
+          var studio = (kv[0] || "").replace(/\s+/g, " ").trim();
+          if (studio) pairs.push({
+            studio: studio,
+            type: (kv[1] || "").replace(/\s+/g, " ").trim()
+          });
+        });
+      } else {
+        var pi = zvuk.lastIndexOf("|");
+        var type = pi >= 0 ? zvuk.slice(pi + 1).replace(/\s+/g, " ").trim() : "";
+        (pi >= 0 ? zvuk.slice(0, pi) : zvuk).split(",").forEach(function(s) {
+          var studio = s.replace(/\s+/g, " ").trim();
+          if (studio) pairs.push({
+            studio: studio,
+            type: type
+          });
+        });
+      }
+      return labelVoices(voices, pairs);
     },
     findPlayer: function(doc) {
       var box = doc.querySelector('iframe[data-src*="ashdi.vip"], iframe[src*="ashdi.vip"]');
@@ -1348,11 +1459,15 @@
         seen[href] = true;
         var img = card.querySelector(".short-img img") || card.querySelector("img");
         var poster = img ? img.getAttribute("data-src") || img.getAttribute("src") || "" : "";
+        var lv1 = card.querySelector(".short-label-level-1 span") || card.querySelector(".short-label-level-1");
+        var lv2 = card.querySelector(".short-label-level-2 span") || card.querySelector(".short-label-level-2");
+        var label = [ lv1 ? lv1.textContent : "", lv2 ? lv2.textContent : "" ].join(" ").replace(/\s+/g, " ").trim();
         out.push({
           title: title,
           year: "",
           url: href,
           poster: poster ? absUrl(poster, self.baseUrl) : "",
+          label: label,
           is_series: self.isSeriesUrl(href)
         });
       }
@@ -1383,6 +1498,17 @@
       }
       var tm = ("" + (titleText || "")).match(/\((\d{4})\)/);
       return tm ? tm[1] : "";
+    },
+    dubRow: function(doc) {
+      var lis = doc.querySelectorAll(".short-list li");
+      for (var i = 0; i < lis.length; i++) {
+        var sp = lis[i].querySelector("span");
+        if (sp && /Переклад/i.test(sp.textContent || "")) {
+          var v = lis[i].querySelector("span[data-popup-title]") || lis[i].querySelectorAll("span")[1];
+          return v ? v.textContent.replace(/\s+/g, " ").trim() : "";
+        }
+      }
+      return "";
     },
     detail: function(url, ok, err) {
       var self = this;
@@ -1419,8 +1545,9 @@
             ok(base);
             return;
           }
+          var dub = dubPairsTypeFirst(self.dubRow(doc));
           self.extract(playerUrl, function(data) {
-            base.voices = data && data.voices || [];
+            base.voices = labelVoices(data && data.voices || [], dub);
             ok(base);
           }, err);
           return;
@@ -1486,6 +1613,197 @@
           quality: null,
           subtitles: p.subtitles,
           poster: p.poster
+        });
+      }, err);
+    }
+  };
+  SOURCES.bamboo = {
+    id: "bamboo",
+    title: "BambooUA",
+    baseUrl: "https://bambooua.com",
+    priority: 6,
+    headers: function() {
+      return {
+        Referer: this.baseUrl + "/"
+      };
+    },
+    search: function(query, ok, err) {
+      var self = this;
+      var url = self.baseUrl + "/index.php?do=search&subaction=search&story=" + encodeURIComponent(query);
+      return net(url, {
+        dataType: "text",
+        headers: self.headers()
+      }, function(html) {
+        ok(self.parseSearch(html));
+      }, err);
+    },
+    parseSearch: function(html) {
+      var self = this;
+      var doc = htmlDoc(html);
+      var out = [];
+      var seen = {};
+      var cards = doc.querySelectorAll(".cat-item");
+      for (var i = 0; i < cards.length; i++) {
+        var card = cards[i];
+        var a = card.querySelector("a.link-title") || card.querySelector("a[href]");
+        var href = a ? absUrl(a.getAttribute("href"), self.baseUrl) : "";
+        if (!href || href.indexOf(".html") < 0 || seen[href]) continue;
+        var tEl = card.querySelector(".info .title h2") || card.querySelector("h2");
+        var title = tEl ? tEl.textContent.replace(/\s+/g, " ").trim() : "";
+        if (!title) {
+          var alt = card.querySelector("img[alt]");
+          title = alt ? (alt.getAttribute("alt") || "").replace(/\s+/g, " ").trim() : "";
+        }
+        if (!title) continue;
+        seen[href] = true;
+        var img = card.querySelector(".poster img") || card.querySelector("img");
+        var poster = img ? img.getAttribute("data-src") || img.getAttribute("src") || "" : "";
+        out.push({
+          title: title,
+          year: "",
+          url: href,
+          poster: poster ? absUrl(poster, self.baseUrl) : "",
+          is_series: !/\/(cinema|films?|movie)\//i.test(href)
+        });
+      }
+      return out;
+    },
+    parsePlaylist: function(html) {
+      var m = ("" + html).match(/playlist\s*=\s*(\[[\s\S]*?\])\s*;/);
+      if (!m) return null;
+      try {
+        return JSON.parse(m[1]);
+      } catch (e) {
+        return null;
+      }
+    },
+    seasonNum: function(pl, html) {
+      var s = JSON.stringify(pl).match(/\/s(\d+)\//);
+      if (s) return parseInt(s[1], 10);
+      var t = ("" + html).match(/([0-9]{1,2})\s*Сезон/i);
+      return t ? parseInt(t[1], 10) : 1;
+    },
+    toVoices: function(pl, season) {
+      var norm = pl.map(function(v) {
+        if (v.folder && v.folder.length && v.folder[0] && v.folder[0].file != null && v.folder[0].folder == null) {
+          return {
+            title: v.title || "",
+            folder: [ {
+              title: "Сезон " + season,
+              folder: v.folder
+            } ]
+          };
+        }
+        return v;
+      });
+      var voices = playlistToVoices(norm);
+      for (var vi = 0; vi < voices.length; vi++) {
+        var seasons = voices[vi].seasons || [];
+        for (var si = 0; si < seasons.length; si++) {
+          var eps = seasons[si].episodes || [];
+          for (var ei = 0; ei < eps.length; ei++) {
+            eps[ei].season = season || si + 1;
+            eps[ei].episode = ei + 1;
+          }
+        }
+      }
+      return voices;
+    },
+    parseMeta: function(doc) {
+      var ogTitle = metaContent(doc, "og:title");
+      var poster = absUrl(metaContent(doc, "og:image"), this.baseUrl);
+      var h1 = doc.querySelector("h1");
+      var title = h1 ? h1.textContent.replace(/\s+/g, " ").trim() : "";
+      if (!title) title = ogTitle.split("|")[0].replace(/\s*\(\d{4}\)[\s\S]*$/, "").replace(/\s+/g, " ").trim();
+      var ym = ogTitle.match(/\((\d{4})\)/);
+      return {
+        title: title,
+        poster: poster,
+        year: ym ? ym[1] : ""
+      };
+    },
+    detail: function(url, ok, err) {
+      var self = this;
+      ok = ok || function() {};
+      err = err || function() {};
+      return net(url, {
+        dataType: "text",
+        headers: self.headers()
+      }, function(html) {
+        var doc = htmlDoc(html);
+        var meta = self.parseMeta(doc);
+        var pl = self.parsePlaylist(html);
+        var is_series = !!(pl && pl.some(function(v) {
+          return v.folder;
+        }));
+        if (is_series) {
+          ok({
+            is_series: true,
+            voices: self.toVoices(pl, self.seasonNum(pl, html)),
+            title: meta.title,
+            year: meta.year,
+            poster: meta.poster
+          });
+          return;
+        }
+        ok({
+          is_series: false,
+          playerUrl: url,
+          title: meta.title,
+          year: meta.year,
+          poster: meta.poster
+        });
+      }, err);
+    },
+    extract: function(target, ok, err) {
+      var self = this;
+      ok = ok || function() {};
+      err = err || function() {};
+      if (!target) {
+        err();
+        return;
+      }
+      if (/\.m3u8(\?|$)/.test(target) || /\.mp4(\?|$)/.test(target)) {
+        ok({
+          url: target,
+          quality: null,
+          subtitles: [],
+          poster: ""
+        });
+        return;
+      }
+      return net(target, {
+        dataType: "text",
+        headers: self.headers()
+      }, function(html) {
+        var pl = self.parsePlaylist(html);
+        if (!pl || !pl.length) {
+          err();
+          return;
+        }
+        if (pl.some(function(v) {
+          return v.folder;
+        })) {
+          ok({
+            voices: self.toVoices(pl, self.seasonNum(pl, html))
+          });
+          return;
+        }
+        var voices = self.toVoices(pl, 1);
+        if (voices.length === 1) {
+          var ep = firstEpisode(voices);
+          if (ep && ep.file) {
+            ok({
+              url: ep.file,
+              quality: null,
+              subtitles: [],
+              poster: ""
+            });
+            return;
+          }
+        }
+        ok({
+          voices: voices
         });
       }, err);
     }
@@ -1808,14 +2126,14 @@
           var vitems = [];
           for (var vi = 0; vi < series_voices.length; vi++) {
             vitems.push({
-              title: series_voices[vi].title || Lampa.Lang.translate("online_ua_voice") + " " + (vi + 1),
+              title: series_voices[vi].label || series_voices[vi].title || Lampa.Lang.translate("online_ua_voice") + " " + (vi + 1),
               selected: vi === voice_index,
               index: vi
             });
           }
           select.push({
             title: Lampa.Lang.translate("online_ua_voice"),
-            subtitle: voice.title || "",
+            subtitle: voice.label || voice.title || "",
             items: vitems,
             stype: "voice"
           });
@@ -1875,7 +2193,7 @@
       if (mode === "series" && series_voices && series_voices.length) {
         var voice = series_voices[voice_index] || series_voices[0];
         if (series_voices.length > 1 && voice.title) {
-          chosen.push(Lampa.Lang.translate("online_ua_voice") + ": " + voice.title);
+          chosen.push(Lampa.Lang.translate("online_ua_voice") + ": " + (voice.label || voice.title));
         }
         var seasons = voice.seasons || [];
         if (seasons.length && seasons[season_index]) {
@@ -1941,6 +2259,7 @@
         var info = [];
         if (item.year) info.push(item.year);
         info.push(Lampa.Lang.translate(item.is_series ? "online_ua_series" : "online_ua_movie"));
+        if (item.label) info.push(item.label);
         var cached = enabled ? PROBE_CACHE[probeKey(item)] : null;
         var hintQ = enabled ? {
           resolution: "",
@@ -2226,7 +2545,13 @@
         err();
         return;
       }
-      last_request = src.extract(ep.file || ep.page, ok, err);
+      last_request = src.extract(ep.file || ep.page, function(data) {
+        if (data && (!data.subtitles || !data.subtitles.length) && ep.subtitle) {
+          var subs = parseSubtitles(ep.subtitle);
+          if (subs.length) data.subtitles = subs;
+        }
+        ok(data);
+      }, err);
     };
     this.start = function() {
       if (Lampa.Activity.active().activity !== this.activity) return;

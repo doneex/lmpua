@@ -45,7 +45,7 @@ Settings → *UA Онлайн* has an optional **Proxy** field (blank by default
 
 ```
 node serve.js
-# then add  http://<your-computer-ip>:8080/lampa-ua.js  in Lampa
+# then add  http://<your-computer-ip>:8080/lu.js  in Lampa
 ```
 
 (Only works when the device is on the same network and not tunneling through a VPN.)

@@ -1,7 +1,7 @@
 // Local dev + optional UA-relay server for testing the plugin in Lampa.
 //
 // 1) Serve the plugin:
-//      node serve.js  →  add  http://<your-mac-ip>:8080/lampa-ua.js  in
+//      node serve.js  →  add  http://<your-mac-ip>:8080/lu.js  in
 //      Lampa → Settings → Plugins.  (CORS *, no-cache, always latest build.)
 //
 // 2) Optional UA relay (to unblock geo-gated sources with Windscribe):
@@ -76,7 +76,7 @@ http.createServer(function (req, res) {
   }
 
   var urlPath = decodeURIComponent(req.url.split('?')[0]);
-  var file = path.normalize(path.join(ROOT, urlPath === '/' ? 'lampa-ua.js' : urlPath));
+  var file = path.normalize(path.join(ROOT, urlPath === '/' ? 'lu.js' : urlPath));
   if (file.indexOf(ROOT) !== 0) {
     res.writeHead(403);
     return res.end();
@@ -93,7 +93,7 @@ http.createServer(function (req, res) {
     res.end(data);
   });
 }).listen(PORT, function () {
-  console.log('Serving  http://0.0.0.0:' + PORT + '/lampa-ua.js');
+  console.log('Serving  http://0.0.0.0:' + PORT + '/lu.js');
   console.log('UA relay http://0.0.0.0:' + PORT + '/proxy/   (set as plugin proxy; connect Windscribe→UA on this machine)');
   console.log('Find your IP: ipconfig getifaddr en0');
 });
