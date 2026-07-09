@@ -60,7 +60,7 @@
   function allSourceKeys() {
     var keys = [];
     for (var k in SOURCES) {
-      if (SOURCES.hasOwnProperty(k)) keys.push(k);
+      if (SOURCES.hasOwnProperty(k) && !SOURCES[k].hidden) keys.push(k);
     }
     keys.sort(function(a, b) {
       return (SOURCES[a].priority || 0) - (SOURCES[b].priority || 0);
@@ -1064,6 +1064,7 @@
     id: "kinoukr",
     title: "KinoUkr",
     baseUrl: "https://kinoukr.tv",
+    hidden: true,
     priority: 3,
     headers: function() {
       return {

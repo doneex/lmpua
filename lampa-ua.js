@@ -126,7 +126,9 @@
     function allSourceKeys() {
         var keys = [];
         for (var k in SOURCES) {
-            if (SOURCES.hasOwnProperty(k)) keys.push(k);
+            // `hidden` sources stay in code but are excluded from the UI (source
+            // selector AND enable toggles). Flip the flag to re-enable.
+            if (SOURCES.hasOwnProperty(k) && !SOURCES[k].hidden) keys.push(k);
         }
         keys.sort(function (a, b) {
             return (SOURCES[a].priority || 0) - (SOURCES[b].priority || 0);
@@ -1298,6 +1300,10 @@
         id: 'kinoukr',
         title: 'KinoUkr',
         baseUrl: 'https://kinoukr.tv',
+        // Hidden for now: its search sits behind a Cloudflare interactive JS
+        // challenge that a JS-less client can't solve (confirmed on-device, even
+        // with VPN). Detail/stream work; remove this flag if search is solved.
+        hidden: true,
         priority: 3,
 
         headers: function () {
