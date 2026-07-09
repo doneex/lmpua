@@ -1,0 +1,14 @@
+# Local dev / research notes — not part of the published plugin
+research/
+sources/
+docs/
+PROGRESS.md
+
+# Third-party & scraped content must never be published
+# (research/ already covers research/vendor and sources/ covers fixtures)
+
+# Local / editor / generated
+.DS_Store
+node_modules/
+*.log
+.env
