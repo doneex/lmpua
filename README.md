@@ -24,7 +24,7 @@ The first (GitHub Pages) is preferred once Pages is enabled (Settings → Pages 
 | Source | Content | Works without VPN |
 |--------|---------|-------------------|
 | **UAFilm** (klon.fun) | films + series, UA | ✅ yes |
-| **UASerials** (uaserials.fm) | films + series, UA | ✅ yes (native apps only — hidden on browser-based platforms, see below) |
+| **UASerials** (uaserials.vip) | films + series, UA | ✅ yes |
 | **UAFix** (uafix.net) | Netflix dubbed UA | ⚠️ films only (series geo-locked to UA) |
 | **UAKino** (uakino.com.ua) | films + series, UA | ▶️ needs a Ukraine VPN (players geo-locked) |
 | **KinoUkr** (kinoukr.tv) | films + series, UA | ▶️ streams yes; search may be blocked by the site's Cloudflare check |
@@ -49,7 +49,7 @@ For a reliable setup, deploy your own free [Cloudflare Worker](https://workers.c
 
 ```js
 // Cloudflare Worker: personal CORS relay, restricted to this plugin's source hosts.
-const ALLOW = /(^|\.)(uafix\.net|klon\.fun|uaserials\.fm|uakino\.com\.ua|bambooua\.com|ashdi\.vip|zetvideo\.net|kinoukr\.tv|hdvbua\.pro)$/;
+const ALLOW = /(^|\.)(uafix\.net|klon\.fun|uaserials\.vip|uakino\.com\.ua|bambooua\.com|ashdi\.vip|zetvideo\.net|kinoukr\.tv|hdvbua\.pro)$/;
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': '*' };
 // Player hosts that hide the real page unless the embedding site's Referer is sent
 // (browsers strip Referer from XHR, so the relay must add it):
@@ -103,7 +103,7 @@ export default {
 
 Playback on browser-based platforms goes through the relay too: Lampa plays HLS there with hls.js, whose manifest/segment requests are also CORS-blocked (`manifestLoadError`). When no native network stack is detected and a proxy is set in settings, the plugin hands the player relay-prefixed stream and subtitle URLs, and the worker above rewrites `.m3u8` manifests so segments keep flowing through it. On Android everything plays direct as before. This only works with your own worker (prefix-style) — the `?url=`-style public proxies can't rewrite manifests, so playback skips them.
 
-**UASerials is hidden on browser-based platforms**: its Cloudflare protection silently drops requests from proxy egress (Cloudflare Workers, public CORS proxies alike), so no relay can reach it — it only works where the app has a native network stack (Android / Android TV / Tizen).
+(Historical note: the plugin originally used uaserials.fm, whose Cloudflare protection silently drops relay traffic — it has since switched to the uaserials.vip install, which has no such gate and works through the relay like every other source.)
 
 ## Local development
 

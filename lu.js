@@ -1484,9 +1484,11 @@
   SOURCES.uaserials = {
     id: "uaserials",
     title: "UASerials",
-    baseUrl: "https://uaserials.fm",
+    // uaserials.vip — sibling install of uaserials.fm WITHOUT the Cloudflare zone that
+    // silently stalls Worker/datacenter egress (.fm broke browser platforms). Different
+    // template (article.card) + different post IDs; same ashdi.vip player downstream.
+    baseUrl: "https://uaserials.vip",
     priority: 5,
-    requiresDirect: true,
     headers: function() {
       return {
         Referer: this.baseUrl + "/"
@@ -1507,39 +1509,37 @@
       var doc = htmlDoc(html);
       var out = [];
       var seen = {};
-      var cards = doc.querySelectorAll(".short-item");
+      var cards = doc.querySelectorAll("article.card");
       for (var i = 0; i < cards.length; i++) {
         var card = cards[i];
-        var a = card.querySelector("a.short-img") || card.querySelector("a[href]");
+        var a = card.querySelector("a.card__img") || card.querySelector("a[href]");
         var href = a ? absUrl(a.getAttribute("href"), self.baseUrl) : "";
         if (!href || seen[href]) continue;
-        var tEl = card.querySelector(".th-title");
-        var title = tEl ? tEl.textContent.replace(/\s+/g, " ").trim() : "";
-        if (!title) {
+        // "Венздей (2022), 1, 2 Сезон" / "Матриця часу (2017)" — the year is a nested link
+        var tEl = card.querySelector(".card__title");
+        var raw = tEl ? tEl.textContent.replace(/\s+/g, " ").trim() : "";
+        if (!raw) {
           var img0 = card.querySelector("img");
-          title = img0 ? (img0.getAttribute("alt") || "").replace(/\s+/g, " ").trim() : "";
+          raw = img0 ? (img0.getAttribute("alt") || "").replace(/\s+/g, " ").trim() : "";
         }
-        if (!title) continue;
+        if (!raw) continue;
         seen[href] = true;
-        var img = card.querySelector(".short-img img") || card.querySelector("img");
+        var ym = raw.match(/\((\d{4})\)/);
+        var title = raw.replace(/\s*\(\d{4}\)\s*/, " ").replace(/\s*,\s*[\d,\s]*Сезон\s*$/i, "").replace(/\s+/g, " ").trim();
+        var lm = raw.match(/,\s*([\d,\s]*Сезон)\s*$/i);
+        var img = card.querySelector(".card__img img") || card.querySelector("img");
         var poster = img ? img.getAttribute("data-src") || img.getAttribute("src") || "" : "";
-        var lv1 = card.querySelector(".short-label-level-1 span") || card.querySelector(".short-label-level-1");
-        var lv2 = card.querySelector(".short-label-level-2 span") || card.querySelector(".short-label-level-2");
-        var label = [ lv1 ? lv1.textContent : "", lv2 ? lv2.textContent : "" ].join(" ").replace(/\s+/g, " ").trim();
+        var genres = card.innerHTML || "";
         out.push({
           title: title,
-          year: "",
+          year: ym ? ym[1] : "",
           url: href,
           poster: poster ? absUrl(poster, self.baseUrl) : "",
-          label: label,
-          is_series: self.isSeriesUrl(href)
+          label: lm ? lm[1].replace(/\s+/g, " ").trim() : "",
+          is_series: /Сезон/i.test(raw) || /\/(serialy|multserialy)\//.test(genres)
         });
       }
       return out;
-    },
-    isSeriesUrl: function(url) {
-      url = "" + (url || "");
-      return url.indexOf("/series/") >= 0 || url.indexOf("/cartoons/") >= 0 || url.indexOf("/anime/") >= 0;
     },
     findPlayer: function(doc) {
       var box = doc.querySelector('iframe[src*="ashdi.vip"], iframe[data-src*="ashdi.vip"]');
@@ -1552,24 +1552,23 @@
       return "";
     },
     parseYear: function(doc, titleText) {
-      var lis = doc.querySelectorAll(".short-list li");
-      for (var i = 0; i < lis.length; i++) {
-        var sp = lis[i].querySelector("span");
-        if (sp && /Рік/i.test(sp.textContent || "")) {
-          var m = (lis[i].textContent || "").match(/(\d{4})/);
-          if (m) return m[1];
-        }
+      // the page's own year row links to /xfsearch/year/YYYY/ and comes before sidebar years
+      var yl = doc.querySelector('a[href*="xfsearch/year/"]');
+      if (yl) {
+        var m = (yl.textContent || yl.getAttribute("href") || "").match(/(\d{4})/);
+        if (m) return m[1];
       }
       var tm = ("" + (titleText || "")).match(/\((\d{4})\)/);
       return tm ? tm[1] : "";
     },
     dubRow: function(doc) {
-      var lis = doc.querySelectorAll(".short-list li");
+      // .vip detail pages carry no Переклад row today — generic li scan keeps it harmless
+      var lis = doc.querySelectorAll("li");
       for (var i = 0; i < lis.length; i++) {
         var sp = lis[i].querySelector("span");
-        if (sp && /Переклад/i.test(sp.textContent || "")) {
-          var v = lis[i].querySelector("span[data-popup-title]") || lis[i].querySelectorAll("span")[1];
-          return v ? v.textContent.replace(/\s+/g, " ").trim() : "";
+        if (sp && /Переклад|Озвученн/i.test(sp.textContent || "")) {
+          var t = (lis[i].textContent || "").replace(sp.textContent || "", "");
+          return t.replace(/\s+/g, " ").trim();
         }
       }
       return "";
@@ -1585,17 +1584,19 @@
         var doc = htmlDoc(html);
         var ogTitle = metaContent(doc, "og:title");
         var poster = absUrl(metaContent(doc, "og:image"), self.baseUrl);
-        var nameEl = doc.querySelector("h1.short-title .oname_ua") || doc.querySelector("h1.short-title") || doc.querySelector("h1");
+        var nameEl = doc.querySelector("h1");
         var title = nameEl ? nameEl.textContent.replace(/\s+/g, " ").trim() : "";
+        // "Венздей дивитися онлайн (1, 2 Сезон)" → "Венздей"
+        title = title.replace(/\s*дивитися онлайн.*$/i, "").trim();
         if (!title) {
           var ogm = ogTitle.match(/[«"]([^»"]+)[»"]/);
           title = ogm ? ogm[1].replace(/\s+/g, " ").trim() : ogTitle.replace(/\s+/g, " ").trim();
         }
-        var descEl = doc.querySelector(".ftext.full-text");
+        var descEl = doc.querySelector(".page__text.full-text") || doc.querySelector(".ftext.full-text");
         var description = descEl ? descEl.textContent.replace(/\s+/g, " ").trim() : metaContent(doc, "og:description");
         var year = self.parseYear(doc, ogTitle);
         var playerUrl = self.findPlayer(doc);
-        var is_series = self.isSeriesUrl(url) || /\/serial\//.test(playerUrl);
+        var is_series = /\/serial\//.test(playerUrl);
         if (is_series) {
           var base = {
             is_series: true,
