@@ -2304,13 +2304,6 @@
       var _this = this;
       var src = this.source();
       if (!src) return;
-      if (!item.is_series) {
-        var cached = PROBE_CACHE[probeKey(item)];
-        if (cached && cached.state === "ok" && cached.url) {
-          this.playMovieDirect(item, cached.url);
-          return;
-        }
-      }
       Lampa.Noty.show(Lampa.Lang.translate("online_ua_loading"));
       last_request = src.detail(item.url, function(d) {
         if (!d) {
@@ -2335,16 +2328,21 @@
       var _this = this;
       var src = this.source();
       last_request = src.extract(d.playerUrl, function(data) {
-        if (data && data.url) {
-          _this.startMovie(item, d, data.url, data);
-          return;
-        }
         var voices = data && data.voices || [];
-        if (voices.length) {
-          _this.movieVoices(item, d, voices);
+        if (!voices.length && data && data.url) {
+          voices = [ {
+            title: "Українською",
+            url: data.url,
+            quality: data.quality,
+            subtitles: data.subtitles,
+            poster: data.poster
+          } ];
+        }
+        if (!voices.length) {
+          Lampa.Noty.show(Lampa.Lang.translate("online_ua_no_video"));
           return;
         }
-        Lampa.Noty.show(Lampa.Lang.translate("online_ua_no_video"));
+        _this.movieVoices(item, d, voices);
       }, function(reason) {
         Lampa.Noty.show(playError(reason));
       });
@@ -2358,7 +2356,7 @@
       var pref = Lampa.Storage.get(CONFIG.STORAGE.movie_voice, "") + "";
       var list = [];
       for (var i = 0; i < voices.length; i++) {
-        var vt = ("" + (voices[i].title || Lampa.Lang.translate("online_ua_voice") + " " + (i + 1))).replace(/\s+/g, " ").trim();
+        var vt = ("" + (voices[i].label || voices[i].title || Lampa.Lang.translate("online_ua_voice") + " " + (i + 1))).replace(/\s+/g, " ").trim();
         list.push({
           title: vt,
           index: i,
@@ -2379,6 +2377,10 @@
     };
     this.playMovieVoice = function(item, d, voice) {
       var _this = this;
+      if (voice && voice.url) {
+        _this.startMovie(item, d, voice.url, voice);
+        return;
+      }
       var ep = firstEpisode([ voice ]);
       var target = ep && (ep.file || ep.page);
       if (!target) {
@@ -2407,19 +2409,6 @@
       };
       if (data && data.quality) play.quality = data.quality;
       if (data && data.subtitles && data.subtitles.length) play.subtitles = data.subtitles;
-      Lampa.Player.play(play);
-      Lampa.Player.playlist([ play ]);
-    };
-    this.playMovieDirect = function(item, url) {
-      var movie = object.movie || {};
-      var title = movie.title || item.title;
-      if (movie.id) Lampa.Favorite.add("history", movie, 100);
-      var play = {
-        title: title,
-        url: url,
-        poster: item.poster || (movie.img || ""),
-        timeline: Lampa.Timeline.view(movieHash(item))
-      };
       Lampa.Player.play(play);
       Lampa.Player.playlist([ play ]);
     };
