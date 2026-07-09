@@ -64,7 +64,8 @@ export default {
     let host; try { host = new URL(target).hostname; } catch { return new Response('Bad URL', { status: 400, headers: CORS }); }
     if (!ALLOW.test(host)) return new Response('Host not allowed', { status: 403, headers: CORS });
     const headers = { 'User-Agent': 'Mozilla/5.0 (SMART-TV; Linux; Tizen 5.0) AppleWebKit/537.36', 'Accept': '*/*' };
-    const ct = req.headers.get('Content-Type'); if (ct) headers['Content-Type'] = ct;
+    const ct0 = req.headers.get('Content-Type'); if (ct0) headers['Content-Type'] = ct0;
+    const rg = req.headers.get('Range'); if (rg) headers['Range'] = rg;
     const ref = REFERER[host.replace(/^www\./, '')]; if (ref) headers['Referer'] = ref;
     const r = await fetch(target, {
       method: req.method,
@@ -75,12 +76,32 @@ export default {
     for (const k in CORS) h.set(k, CORS[k]);
     h.delete('Content-Security-Policy'); h.delete('X-Frame-Options'); h.delete('Set-Cookie');
     h.delete('Content-Encoding'); h.delete('Content-Length'); // body is already decoded by the runtime
+    // HLS playlists reference variants/segments/keys by RELATIVE URL — rewrite every URI
+    // to absolute and back through this relay, so hls.js on the TV streams via the worker too.
+    const ct = r.headers.get('Content-Type') || '';
+    const finalUrl = r.url || target;
+    if (/mpegurl/i.test(ct) || /\.m3u8(\?|$)/.test(finalUrl)) {
+      const text = await r.text();
+      if (text.slice(0, 7) === '#EXTM3U') {
+        const origin = new URL(req.url).origin;
+        const base = new URL(finalUrl);
+        const prox = (u) => { try { return origin + '/' + new URL(u, base).href; } catch (e) { return u; } };
+        const out = text.split('\n').map((line) => {
+          const t = line.trim();
+          if (!t) return line;
+          if (t[0] === '#') return line.replace(/URI="([^"]+)"/g, (m, u) => 'URI="' + prox(u) + '"');
+          return prox(t);
+        }).join('\n');
+        return new Response(out, { status: r.status, headers: h });
+      }
+      return new Response(text, { status: r.status, headers: h });
+    }
     return new Response(r.body, { status: r.status, headers: h });
   }
 };
 ```
 
-Playback itself normally doesn't need the proxy: webOS plays HLS with the TV's native player, which isn't subject to CORS. If streams work on Android but not on LG after search is fixed, report it — that's a separate path.
+Playback on browser-based platforms goes through the relay too: Lampa plays HLS there with hls.js, whose manifest/segment requests are also CORS-blocked (`manifestLoadError`). When no native network stack is detected and a proxy is set in settings, the plugin hands the player relay-prefixed stream and subtitle URLs, and the worker above rewrites `.m3u8` manifests so segments keep flowing through it. On Android everything plays direct as before. This only works with your own worker (prefix-style) — the `?url=`-style public proxies can't rewrite manifests, so playback skips them.
 
 **UASerials is hidden on browser-based platforms**: its Cloudflare protection silently drops requests from proxy egress (Cloudflare Workers, public CORS proxies alike), so no relay can reach it — it only works where the app has a native network stack (Android / Android TV / Tizen).
 

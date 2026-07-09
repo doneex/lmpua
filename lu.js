@@ -24,6 +24,13 @@
   function proxied(prefix, url) {
     return prefix.charAt(prefix.length - 1) === "=" ? prefix + encodeURIComponent(url) : prefix + url;
   }
+  function userProxyPrefix() {
+    var p = ((Lampa.Storage.field(CONFIG.STORAGE.proxy) || "") + "").trim();
+    if (!p) return "";
+    var last = p.charAt(p.length - 1);
+    if (last !== "/" && last !== "=" && last !== "?" && last !== "&") p += "/";
+    return p;
+  }
   function net(url, opts, ok, err) {
     opts = opts || {};
     ok = ok || function() {};
@@ -37,12 +44,8 @@
     if (opts.headers) params.headers = opts.headers;
     var chain = [];
     chain.push(url);
-    var user_proxy = ((Lampa.Storage.field(CONFIG.STORAGE.proxy) || "") + "").trim();
-    if (user_proxy) {
-      var last = user_proxy.charAt(user_proxy.length - 1);
-      if (last !== "/" && last !== "=" && last !== "?" && last !== "&") user_proxy += "/";
-      if (!(post && user_proxy.charAt(user_proxy.length - 1) === "=")) chain.push(proxied(user_proxy, url));
-    }
+    var user_proxy = userProxyPrefix();
+    if (user_proxy && !(post && user_proxy.charAt(user_proxy.length - 1) === "=")) chain.push(proxied(user_proxy, url));
     for (var i = 0; i < CONFIG.PROXY_CHAIN.length; i++) {
       var prefix = CONFIG.PROXY_CHAIN[i];
       if (post && prefix.charAt(prefix.length - 1) === "=") continue;
@@ -95,6 +98,25 @@
     } catch (e) {
       return true;
     }
+  }
+  function playableUrl(url) {
+    if (!url || canDirect()) return url;
+    if (!/^https?:\/\//.test("" + url)) return url;
+    var prefix = userProxyPrefix();
+    if (!prefix) return url;
+    if (prefix.charAt(prefix.length - 1) === "=") return url;
+    return prefix + url;
+  }
+  function proxySubtitles(subs) {
+    if (!subs || !subs.length || canDirect()) return subs;
+    var out = [];
+    for (var i = 0; i < subs.length; i++) {
+      out.push({
+        label: subs[i].label,
+        url: playableUrl(subs[i].url)
+      });
+    }
+    return out;
   }
   function allSourceKeys() {
     var keys = [];
@@ -2444,12 +2466,12 @@
       if (movie.id) Lampa.Favorite.add("history", movie, 100);
       var play = {
         title: title,
-        url: url,
+        url: playableUrl(url),
         poster: data && data.poster || d.poster || item.poster || (movie.img || ""),
         timeline: Lampa.Timeline.view(movieHash(item))
       };
       if (data && data.quality) play.quality = data.quality;
-      if (data && data.subtitles && data.subtitles.length) play.subtitles = data.subtitles;
+      if (data && data.subtitles && data.subtitles.length) play.subtitles = proxySubtitles(data.subtitles);
       Lampa.Player.play(play);
       Lampa.Player.playlist([ play ]);
     };
@@ -2521,12 +2543,12 @@
         }
         var first = {
           title: episodeTitle(episodes[startIdx], season),
-          url: data.url,
+          url: playableUrl(data.url),
           poster: data.poster || episodes[startIdx].poster || series_detail && series_detail.poster || "",
           timeline: Lampa.Timeline.view(episodeHash(episodes[startIdx], season, voice))
         };
         if (data.quality) first.quality = data.quality;
-        if (data.subtitles && data.subtitles.length) first.subtitles = data.subtitles;
+        if (data.subtitles && data.subtitles.length) first.subtitles = proxySubtitles(data.subtitles);
         Lampa.Player.play(first);
         var playlist = [];
         for (var i = startIdx; i < episodes.length; i++) {
@@ -2541,9 +2563,9 @@
               timeline: Lampa.Timeline.view(episodeHash(ep, season, voice)),
               url: function(call) {
                 _this.resolveEpisode(ep, function(dd) {
-                  cell.url = dd && dd.url || "";
+                  cell.url = dd && dd.url ? playableUrl(dd.url) : "";
                   if (dd && dd.quality) cell.quality = dd.quality;
-                  if (dd && dd.subtitles) cell.subtitles = dd.subtitles;
+                  if (dd && dd.subtitles) cell.subtitles = proxySubtitles(dd.subtitles);
                   call();
                 }, function() {
                   cell.url = "";
