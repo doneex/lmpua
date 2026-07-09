@@ -49,7 +49,7 @@ For a reliable setup, deploy your own free [Cloudflare Worker](https://workers.c
 
 ```js
 // Cloudflare Worker: personal CORS relay, restricted to this plugin's source hosts.
-const ALLOW = /(^|\.)(uafix\.net|klon\.fun|uaserials\.fm|uakino\.com\.ua|bambooua\.com|ashdi\.vip|zetvideo\.net|kinoukr\.tv)$/;
+const ALLOW = /(^|\.)(uafix\.net|klon\.fun|uaserials\.fm|uakino\.com\.ua|bambooua\.com|ashdi\.vip|zetvideo\.net|kinoukr\.tv|hdvbua\.pro)$/;
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': '*' };
 // Player hosts that hide the real page unless the embedding site's Referer is sent
 // (browsers strip Referer from XHR, so the relay must add it):
