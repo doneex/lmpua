@@ -7,7 +7,7 @@
     PLUGIN_ID: "online_ua",
     VERSION: "0.1.0",
     NAME: "UA Онлайн",
-    PROXY_CHAIN: [],
+    PROXY_CHAIN: [ "https://api.allorigins.win/raw?url=", "https://api.codetabs.com/v1/proxy?quest=" ],
     STORAGE: {
       proxy: "online_ua_proxy_url",
       source: "online_ua_source",
@@ -16,6 +16,14 @@
       movie_voice: "online_ua_movie_voice"
     }
   };
+  var NET_TIER_HINT = {};
+  function urlHost(url) {
+    var m = /^https?:\/\/([^\/]+)/.exec("" + url);
+    return m ? m[1] : "";
+  }
+  function proxied(prefix, url) {
+    return prefix.charAt(prefix.length - 1) === "=" ? prefix + encodeURIComponent(url) : prefix + url;
+  }
   function net(url, opts, ok, err) {
     opts = opts || {};
     ok = ok || function() {};
@@ -29,39 +37,71 @@
     if (opts.headers) params.headers = opts.headers;
     var chain = [];
     chain.push(url);
-    for (var i = 0; i < CONFIG.PROXY_CHAIN.length; i++) {
-      chain.push(CONFIG.PROXY_CHAIN[i] + url);
+    var user_proxy = ((Lampa.Storage.field(CONFIG.STORAGE.proxy) || "") + "").trim();
+    if (user_proxy) {
+      var last = user_proxy.charAt(user_proxy.length - 1);
+      if (last !== "/" && last !== "=" && last !== "?" && last !== "&") user_proxy += "/";
+      if (!(post && user_proxy.charAt(user_proxy.length - 1) === "=")) chain.push(proxied(user_proxy, url));
     }
-    var user_proxy = (Lampa.Storage.field(CONFIG.STORAGE.proxy) || "") + "";
-    if (user_proxy) chain.push(user_proxy + url);
-    var index = 0;
+    for (var i = 0; i < CONFIG.PROXY_CHAIN.length; i++) {
+      var prefix = CONFIG.PROXY_CHAIN[i];
+      if (post && prefix.charAt(prefix.length - 1) === "=") continue;
+      chain.push(proxied(prefix, url));
+    }
+    var host = urlHost(url);
+    var start = NET_TIER_HINT[host] || 0;
+    if (start >= chain.length) start = 0;
+    var index = start;
+    var stopped = false;
     function attempt(last_a, last_c) {
+      if (stopped) return;
       if (index >= chain.length) {
+        if (start > 0) delete NET_TIER_HINT[host];
         err(last_a, last_c);
         return;
       }
+      var tier = index;
       var target = chain[index];
       index++;
       request.clear();
       request.timeout(timeout);
       request["native"](target, function(body) {
+        if (stopped) return;
         if (body === "" || body === null || body === undefined) {
           attempt(body, "empty");
           return;
         }
+        NET_TIER_HINT[host] = tier;
         ok(body, target);
       }, function(a, c) {
         attempt(a, c);
       }, post, params);
     }
     attempt();
-    return request;
+    return {
+      clear: function() {
+        stopped = true;
+        request.clear();
+      }
+    };
   }
   var SOURCES = {};
+  function canDirect() {
+    try {
+      if (window.AndroidJS) return true;
+      var p = Lampa.Platform;
+      if (!p || !p.is) return true;
+      return !!(p.is("android") || p.is("tizen"));
+    } catch (e) {
+      return true;
+    }
+  }
   function allSourceKeys() {
     var keys = [];
     for (var k in SOURCES) {
-      if (SOURCES.hasOwnProperty(k) && !SOURCES[k].hidden) keys.push(k);
+      if (!SOURCES.hasOwnProperty(k) || SOURCES[k].hidden) continue;
+      if (SOURCES[k].requiresDirect && !canDirect()) continue;
+      keys.push(k);
     }
     keys.sort(function(a, b) {
       return (SOURCES[a].priority || 0) - (SOURCES[b].priority || 0);
@@ -1424,6 +1464,7 @@
     title: "UASerials",
     baseUrl: "https://uaserials.fm",
     priority: 5,
+    requiresDirect: true,
     headers: function() {
       return {
         Referer: this.baseUrl + "/"
@@ -2773,9 +2814,9 @@
         ru: "Прокси (необязательно)"
       },
       online_ua_proxy_desc: {
-        uk: "Необов’язковий запасний CORS-проксі. Використовується лише якщо пряме з’єднання та вбудовані проксі не спрацювали. Залиште порожнім, якщо не впевнені.",
-        en: "Optional fallback CORS proxy. Used only if the direct connection and the built-in proxies fail. Leave empty if unsure.",
-        ru: "Необязательный запасной CORS-прокси. Используется, только если прямое соединение и встроенные прокси не сработали. Оставьте пустым, если не уверены."
+        uk: "Власний CORS-проксі (потрібен на LG/webOS). Спробується після прямого з’єднання, перед вбудованими публічними проксі. Префікс перед URL; якщо закінчується на «=», адреса кодується (стиль ?url=). Залиште порожнім, якщо не впевнені.",
+        en: "Your own CORS proxy (needed on LG/webOS). Tried after the direct connection, before the built-in public proxies. Used as a prefix; if it ends with \"=\", the target URL is encoded (?url= style). Leave empty if unsure.",
+        ru: "Свой CORS-прокси (нужен на LG/webOS). Пробуется после прямого соединения, перед встроенными публичными прокси. Префикс перед URL; если заканчивается на «=», адрес кодируется (стиль ?url=). Оставьте пустым, если не уверены."
       },
       online_ua_probe_title: {
         uk: "Показувати доступність і якість у пошуку",
