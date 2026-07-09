@@ -2833,9 +2833,14 @@
         initMain();
     }
 
-    if (window.appready) startPlugin();
-    else Lampa.Listener.follow('app', function (e) {
-        if (e.type === 'ready') startPlugin();
-    });
+    // Register immediately, exactly like the reference plugins (online_mod
+    // calls startPlugin() unconditionally at load). Do NOT gate on
+    // window.appready: some Lampa builds never set it truthy, and for a
+    // URL-added plugin the 'app'→'ready' event has ALREADY fired by load time —
+    // the old guard left the plugin registered-but-inert (loads OK, red "!",
+    // no card button). Registration only needs Lampa to exist, which it does
+    // by the time this script runs. The window.online_ua_plugin guard at the
+    // top already prevents this IIFE from ever running twice.
+    startPlugin();
 
 })();
